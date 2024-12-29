@@ -1,0 +1,116 @@
+package titanic;
+
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapreduce.*;
+
+import java.io.IOException;
+
+public class TitanicMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+
+    private final static IntWritable ageWritable = new IntWritable();
+    private final static IntWritable countWritable = new IntWritable(1);
+    private Text outputKey = new Text();
+    
+    public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        // Split the CSV row into fields
+        String[] fields = value.toString().split(",");
+    
+        if (fields.length >= 9) {
+            try {
+                String survived = fields[1].trim();   // 1: Survived (0 or 1)
+                String sex = fields[4].trim();        // 4: Sex (male or female)
+                String ageStr = fields[5].trim();     // 5: Age
+                int pclass = Integer.parseInt(fields[2].trim()); // 2: Pclass (1, 2, or 3)
+
+                // Task 1: If the person died (survived == 0), emit their age based on gender
+                if ("0".equals(survived) && !ageStr.isEmpty()) {
+                    int age = (int) Double.parseDouble(ageStr);
+                    outputKey.set(sex);  // Use "male" or "female" as the key
+                    ageWritable.set(age);
+                    context.write(outputKey, ageWritable);
+                }
+            
+                // Task 2: If the person survived (survived == 1), emit the class number with count
+                if ("1".equals(survived)) {
+                    outputKey.set("SurvivorClass " + pclass); // Key is "SurvivorClass <pclass>"
+                    context.write(outputKey, countWritable);
+                }
+            } catch (NumberFormatException e) {
+                // Handle invalid data or missing age
+            }
+        }
+    }
+}
+
+package titanic;
+
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapreduce.*;
+
+import java.io.IOException;
+
+public class TitanicReducer extends Reducer<Text, IntWritable, Text, DoubleWritable> {
+
+    private DoubleWritable result = new DoubleWritable();
+    
+    public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
+        // Case 1: Calculating the average age of those who died (key = "male" or "female")
+        if ("male".equals(key.toString()) || "female".equals(key.toString())) {
+            int sum = 0;
+            int count = 0;
+
+            for (IntWritable val : values) {
+                sum += val.get();
+                count++;
+            }
+            if (count > 0) {
+                result.set((double) sum / count);  // Compute average
+                context.write(new Text("Average Age of Died " + key), result);
+            }
+        }
+    
+        // Case 2: Counting survivors in each class (key = "SurvivorClass <class>")
+        else if (key.toString().startsWith("SurvivorClass")) {
+            int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();  // Count how many survivors in this class
+            }
+            result.set(sum);  // Total survivors in this class
+            context.write(new Text(key), result);
+        }
+    }
+}
+
+
+package titanic;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.mapreduce.*;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class TitanicDriver {
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "Titanic Analysis");
+        job.setJarByClass(TitanicDriver.class);
+
+        // Set Mapper and Reducer classes
+        job.setMapperClass(TitanicMapper.class);
+        job.setReducerClass(TitanicReducer.class);
+
+        // Set output types
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+
+        // Set input and output paths
+        FileInputFormat.addInputPath(job, new Path(args[0]));  // Input path (CSV file)
+        FileOutputFormat.setOutputPath(job, new Path(args[1])); // Output path (results)
+
+        // Wait for job to complete
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
